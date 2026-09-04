@@ -19,7 +19,7 @@ import {
 } from '../types/planner';
 import { initialSubjects, defaultPaceConfig } from '../data/initialSyllabus';
 import { initialExams, getInitialExamsForYear } from '../data/initialExams';
-import { CompactSyncDelta } from '../utils/syncHelper';
+import { CompactSyncDelta, applySyncDeltaToSubjects, hydrateExamsFromSync } from '../utils/syncHelper';
 
 export const DEFAULT_USER_PROFILE: UserProfile = {
   id: 'profile-user-default',
@@ -75,6 +75,7 @@ interface PlannerContextType {
   setShowQrScannerModal: (show: boolean) => void;
   incomingSyncData: CompactSyncDelta | null;
   setIncomingSyncData: (data: CompactSyncDelta | null) => void;
+  applySyncDelta: (delta: CompactSyncDelta) => void;
 
   // PWA Install
   isInstallable: boolean;
@@ -845,6 +846,52 @@ export const PlannerProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // Apply full incoming QR sync delta
+  const applySyncDelta = (delta: CompactSyncDelta) => {
+    const updatedSubjects = applySyncDeltaToSubjects(subjects, delta);
+    const updatedExams = hydrateExamsFromSync(delta, exams);
+    const targetId = delta.p.id || currentProfile.id || `profile-${Date.now()}`;
+
+    const newOrUpdatedProfile: UserProfile = {
+      ...currentProfile,
+      ...delta.p,
+      id: targetId,
+      fieldGoals: delta.p.fieldGoals || (delta.p.fieldGoal ? [delta.p.fieldGoal] : ['CBSE Class 12 Boards (95%+)']),
+    };
+
+    const updatedProfilesList = [...profiles];
+    const matchIdx = updatedProfilesList.findIndex(p => p.id === targetId || p.name.toLowerCase() === delta.p.name.toLowerCase());
+    if (matchIdx >= 0) {
+      updatedProfilesList[matchIdx] = newOrUpdatedProfile;
+    } else {
+      updatedProfilesList.push(newOrUpdatedProfile);
+    }
+
+    // Persist immediately to localStorage
+    localStorage.setItem('cbse12_user_profiles_v2', JSON.stringify(updatedProfilesList));
+    localStorage.setItem('cbse12_current_profile_id', targetId);
+
+    const keysToSave = new Set([targetId, currentProfile.id]);
+    keysToSave.forEach(id => {
+      if (!id) return;
+      const pKey = `cbse12_${id}_`;
+      localStorage.setItem(`${pKey}subjects`, JSON.stringify(updatedSubjects));
+      localStorage.setItem(`${pKey}config`, JSON.stringify(delta.c || paceConfig));
+      localStorage.setItem(`${pKey}logs`, JSON.stringify(delta.l || activityLogs));
+      localStorage.setItem(`${pKey}exams`, JSON.stringify(updatedExams));
+    });
+    localStorage.setItem('cbse12_onboarded', 'true');
+
+    // Update React states synchronously
+    setProfiles(updatedProfilesList);
+    setCurrentProfileId(targetId);
+    setSubjects(updatedSubjects);
+    if (delta.c) setPaceConfig(delta.c);
+    if (delta.l) setActivityLogs(delta.l);
+    setExams(updatedExams);
+    setShowOnboardingModal(false);
+  };
+
   return (
     <PlannerContext.Provider
       value={{
@@ -875,6 +922,7 @@ export const PlannerProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setShowQrScannerModal,
         incomingSyncData,
         setIncomingSyncData,
+        applySyncDelta,
         isInstallable,
         installApp,
         addExam,

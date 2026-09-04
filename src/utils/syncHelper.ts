@@ -3,16 +3,44 @@ import jsQR from 'jsqr';
 import { 
   UserProfile, 
   Subject, 
+  Chapter,
+  Exercise,
   PlannerPaceConfig, 
   DailyActivityLog, 
   ExamTarget,
   QuestionStatus,
-  DifficultyLevel
+  DifficultyLevel,
+  QuestionSources,
+  PhysicsDetails,
+  ChemistryDetails,
+  BiologyDetails,
+  EnglishProseDetails,
+  EnglishPoemDetails
 } from '../types/planner';
 import { getInitialExamsForYear } from '../data/initialExams';
 
+export interface CompactChapterDelta {
+  cov?: boolean;
+  rev?: number;
+  we?: number; // workedExamplesCompleted
+  qs?: Partial<QuestionSources>;
+  pd?: Partial<PhysicsDetails>;
+  cd?: Partial<ChemistryDetails>;
+  bd?: Partial<BiologyDetails>;
+  epd?: Partial<EnglishProseDetails>;
+  em?: Partial<EnglishPoemDetails>;
+}
+
+export interface CompactExerciseDelta {
+  name: string;
+  comp: number;
+  diff?: number;
+  rew?: number;
+  qs?: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }>;
+}
+
 export interface CompactSyncDelta {
-  v: number; // version 3
+  v: number; // version 4
   p: UserProfile;
   c: PlannerPaceConfig;
   l?: DailyActivityLog[];
@@ -22,18 +50,12 @@ export interface CompactSyncDelta {
   re?: string[];     // Registered exam IDs
   e?: ExamTarget[];  // Legacy full exam fallback if present
   // Delta map of chapters
-  ch: Record<string, { cov?: boolean; rev?: number }>;
-  // Delta map of exercises: exerciseId / ch::exName -> { name?, comp: number, diff?, rew?, qs? }
-  ex: Record<string, {
-    name?: string;
-    comp: number;
-    diff?: number;
-    rew?: number;
-    qs?: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }>;
-  }>;
+  ch: Record<string, CompactChapterDelta>;
+  // Delta map of exercises: exerciseId / ch::exName -> CompactExerciseDelta
+  ex: Record<string, CompactExerciseDelta>;
 }
 
-// Generate an ultra-compact delta payload (<800 bytes) compressed with LZString
+// Generate an ultra-compact delta payload (<1KB) compressed with LZString
 export function createSyncPayload(
   profile: UserProfile,
   subjects: Subject[],
@@ -47,29 +69,52 @@ export function createSyncPayload(
   subjects.forEach(sub => {
     sub.units.forEach(unit => {
       unit.chapters.forEach(ch => {
-        if (ch.syllabusCovered || (ch.revisionCount && ch.revisionCount > 0)) {
+        // Check if chapter has any progress across all subjects (Math, Physics, Chem, Bio, English)
+        const hasChapterProgress = 
+          ch.syllabusCovered || 
+          (ch.revisionCount && ch.revisionCount > 0) ||
+          (ch.workedExamplesCompleted && ch.workedExamplesCompleted > 0) ||
+          ch.physicsDetails !== undefined ||
+          ch.chemistryDetails !== undefined ||
+          ch.biologyDetails !== undefined ||
+          ch.englishProseDetails !== undefined ||
+          ch.englishPoemDetails !== undefined ||
+          (ch.questionSources && Object.values(ch.questionSources).some(s => s.completed > 0));
+
+        if (hasChapterProgress) {
           chDelta[ch.id] = {
             ...(ch.syllabusCovered ? { cov: true } : {}),
             ...(ch.revisionCount > 0 ? { rev: ch.revisionCount } : {}),
+            ...(ch.workedExamplesCompleted > 0 ? { we: ch.workedExamplesCompleted } : {}),
+            ...(ch.questionSources ? { qs: ch.questionSources } : {}),
+            ...(ch.physicsDetails ? { pd: ch.physicsDetails } : {}),
+            ...(ch.chemistryDetails ? { cd: ch.chemistryDetails } : {}),
+            ...(ch.biologyDetails ? { bd: ch.biologyDetails } : {}),
+            ...(ch.englishProseDetails ? { epd: ch.englishProseDetails } : {}),
+            ...(ch.englishPoemDetails ? { em: ch.englishPoemDetails } : {}),
           };
         }
 
-        ch.exercises.forEach(ex => {
+        // Exercises
+        ch.exercises.forEach((ex, exIdx) => {
           const hasModifiedQuestions = ex.questions && ex.questions.some(q => 
             q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision
           );
 
-          if (ex.completedQuestions > 0 || hasModifiedQuestions) {
+          if (ex.completedQuestions > 0 || ex.difficultQuestions > 0 || ex.reworkQuestions > 0 || hasModifiedQuestions) {
             const qMap: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }> = {};
             if (ex.questions) {
-              ex.questions.forEach(q => {
+              ex.questions.forEach((q, qIdx) => {
                 if (q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision) {
+                  // Index by question ID, questionNumber (Q1, Q2), and index
                   qMap[q.id] = { s: q.status, d: q.difficulty, r: q.needsRevision };
+                  qMap[q.questionNumber] = { s: q.status, d: q.difficulty, r: q.needsRevision };
+                  qMap[`idx_${qIdx}`] = { s: q.status, d: q.difficulty, r: q.needsRevision };
                 }
               });
             }
 
-            const exItem = {
+            const exItem: CompactExerciseDelta = {
               name: ex.name,
               comp: ex.completedQuestions,
               ...(ex.difficultQuestions > 0 ? { diff: ex.difficultQuestions } : {}),
@@ -78,10 +123,9 @@ export function createSyncPayload(
             };
 
             // Save under multiple keys so ANY receiving device matches it 100%:
-            // 1. By ex.id
             exDelta[ex.id] = exItem;
-            // 2. By composite chapter + exercise name
             exDelta[`${ch.id}::${ex.name}`] = exItem;
+            exDelta[`${ch.id}::idx_${exIdx}`] = exItem;
           }
         });
       });
@@ -114,7 +158,7 @@ export function createSyncPayload(
   const recentLogs = (activityLogs || []).slice(-14);
 
   const delta: CompactSyncDelta = {
-    v: 3,
+    v: 4,
     p: profile,
     c: paceConfig,
     l: recentLogs,
@@ -296,7 +340,7 @@ export function playScanSuccessBeep() {
   } catch {}
 }
 
-// Apply delta to subject list with composite key matching
+// Apply delta to subject list with full multi-subject support (Math, Physics, Chem, Bio, English)
 export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSyncDelta): Subject[] {
   return subjects.map(sub => ({
     ...sub,
@@ -304,33 +348,47 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
       ...unit,
       chapters: unit.chapters.map(ch => {
         const chD = delta.ch ? delta.ch[ch.id] : undefined;
-        const updatedChapter = chD ? {
-          ...ch,
-          syllabusCovered: chD.cov ?? ch.syllabusCovered,
-          revisionCount: chD.rev ?? ch.revisionCount,
-        } : ch;
 
-        return {
-          ...updatedChapter,
-          exercises: updatedChapter.exercises.map(ex => {
+        // Restore chapter details across all subjects
+        const updatedChapter: Chapter = {
+          ...ch,
+          syllabusCovered: chD?.cov !== undefined ? chD.cov : ch.syllabusCovered,
+          revisionCount: chD?.rev !== undefined ? chD.rev : ch.revisionCount,
+          workedExamplesCompleted: chD?.we !== undefined ? chD.we : ch.workedExamplesCompleted,
+          questionSources: chD?.qs ? { ...ch.questionSources, ...chD.qs } : ch.questionSources,
+          physicsDetails: chD?.pd && ch.physicsDetails ? { ...ch.physicsDetails, ...chD.pd } : ch.physicsDetails,
+          chemistryDetails: chD?.cd && ch.chemistryDetails ? { ...ch.chemistryDetails, ...chD.cd } : ch.chemistryDetails,
+          biologyDetails: chD?.bd && ch.biologyDetails ? { ...ch.biologyDetails, ...chD.bd } : ch.biologyDetails,
+          englishProseDetails: chD?.epd && ch.englishProseDetails ? { ...ch.englishProseDetails, ...chD.epd } : ch.englishProseDetails,
+          englishPoemDetails: chD?.em && ch.englishPoemDetails ? { ...ch.englishPoemDetails, ...chD.em } : ch.englishPoemDetails,
+          exercises: ch.exercises.map((ex, exIdx) => {
             // Find matching exercise in delta:
-            // 1. By chapter + exercise name composite key (100% resilient across devices)
+            // 1. By composite key ch.id::ex.name
             let exD = delta.ex ? delta.ex[`${ch.id}::${ex.name}`] : undefined;
-            // 2. By exercise ID
+            // 2. By exercise index key ch.id::idx_0
+            if (!exD && delta.ex) exD = delta.ex[`${ch.id}::idx_${exIdx}`];
+            // 3. By exercise ID
             if (!exD && delta.ex) exD = delta.ex[ex.id];
-            // 3. By exercise name ending
+            // 4. By name match
             if (!exD && delta.ex) {
               const match = Object.entries(delta.ex).find(([key, val]) => 
-                key.endsWith(`::${ex.name}`) || (val as any).name === ex.name
+                key.endsWith(`::${ex.name}`) || val.name === ex.name
               );
               if (match) exD = match[1];
             }
 
             if (!exD) return ex;
 
-            const updatedQuestions = ex.questions.map(q => {
-              const qD = exD?.qs?.[q.id];
-              if (!qD) return q;
+            // Update individual question items
+            const updatedQuestions = ex.questions.map((q, qIdx) => {
+              const qD = exD?.qs ? (exD.qs[q.id] || exD.qs[q.questionNumber] || exD.qs[`idx_${qIdx}`]) : undefined;
+              if (!qD) {
+                // If question wasn't individually mapped but exercise completed count includes it
+                if (exD && exD.comp > qIdx && q.status === 'Not Started') {
+                  return { ...q, status: 'Solved' as QuestionStatus };
+                }
+                return q;
+              }
               return {
                 ...q,
                 status: qD.s ?? q.status,
@@ -341,13 +399,15 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
 
             return {
               ...ex,
-              completedQuestions: exD.comp ?? ex.completedQuestions,
-              difficultQuestions: exD.diff ?? ex.difficultQuestions,
-              reworkQuestions: exD.rew ?? ex.reworkQuestions,
+              completedQuestions: exD.comp !== undefined ? exD.comp : ex.completedQuestions,
+              difficultQuestions: exD.diff !== undefined ? exD.diff : ex.difficultQuestions,
+              reworkQuestions: exD.rew !== undefined ? exD.rew : ex.reworkQuestions,
               questions: updatedQuestions,
             };
           }),
         };
+
+        return updatedChapter;
       }),
     })),
   }));

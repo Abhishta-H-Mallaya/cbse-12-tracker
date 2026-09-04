@@ -2,11 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { usePlanner } from '../context/PlannerContext';
 import { 
   parseAnySyncInput,
-  applySyncDeltaToSubjects, 
-  hydrateExamsFromSync, 
   CompactSyncDelta 
 } from '../utils/syncHelper';
-import { UserProfile } from '../types/planner';
 import { 
   Smartphone, 
   CheckCircle2, 
@@ -28,16 +25,7 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
   externalDelta,
   onClearExternalDelta,
 }) => {
-  const { 
-    currentProfile, 
-    profiles,
-    updateCurrentProfile, 
-    subjects, 
-    paceConfig,
-    updatePaceConfig,
-    exams,
-    setShowOnboardingModal
-  } = usePlanner();
+  const { applySyncDelta } = usePlanner();
 
   const [urlPendingSync, setUrlPendingSync] = useState<CompactSyncDelta | null>(null);
   const [successToast, setSuccessToast] = useState(false);
@@ -65,7 +53,7 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
     return (
       <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] p-4 rounded-2xl bg-emerald-600 text-white shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-fadeIn">
         <CheckCircle2 className="w-5 h-5 text-white" />
-        <span>Study records successfully synced! Reloading app...</span>
+        <span>Study records successfully synced! All subjects and progress updated.</span>
       </div>
     );
   }
@@ -74,63 +62,21 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
 
   const handleConfirmSync = () => {
     try {
-      // 1. Determine target profile ID
-      const targetId = activeSync.p.id || currentProfile.id || `profile-${Date.now()}`;
+      // Apply delta directly to PlannerContext
+      applySyncDelta(activeSync);
 
-      const newOrUpdatedProfile: UserProfile = {
-        ...currentProfile,
-        ...activeSync.p,
-        id: targetId,
-        fieldGoals: activeSync.p.fieldGoals || (activeSync.p.fieldGoal ? [activeSync.p.fieldGoal] : ['CBSE Class 12 Boards (95%+)']),
-      };
-
-      // 2. Update profiles array in localStorage
-      let updatedProfilesList = [...profiles];
-      const matchIdx = updatedProfilesList.findIndex(p => p.id === targetId || p.name.toLowerCase() === activeSync.p.name.toLowerCase());
-      if (matchIdx >= 0) {
-        updatedProfilesList[matchIdx] = newOrUpdatedProfile;
-      } else {
-        updatedProfilesList.push(newOrUpdatedProfile);
-      }
-
-      // 3. Hydrate subjects and exams
-      const updatedSubjects = applySyncDeltaToSubjects(subjects, activeSync);
-      const updatedExams = hydrateExamsFromSync(activeSync, exams);
-
-      // 4. Write directly to localStorage for both targetId AND currentProfile.id
-      localStorage.setItem('cbse12_user_profiles_v2', JSON.stringify(updatedProfilesList));
-      localStorage.setItem('cbse12_current_profile_id', targetId);
-
-      const keysToSave = new Set([targetId, currentProfile.id]);
-      keysToSave.forEach(id => {
-        if (!id) return;
-        const pKey = `cbse12_${id}_`;
-        localStorage.setItem(`${pKey}subjects`, JSON.stringify(updatedSubjects));
-        localStorage.setItem(`${pKey}config`, JSON.stringify(activeSync.c || paceConfig));
-        localStorage.setItem(`${pKey}logs`, JSON.stringify(activeSync.l || []));
-        localStorage.setItem(`${pKey}exams`, JSON.stringify(updatedExams));
-      });
-
-      localStorage.setItem('cbse12_onboarded', 'true');
-
-      // 5. Update React state immediately
-      setShowOnboardingModal(false);
-      updateCurrentProfile(newOrUpdatedProfile);
-      if (activeSync.c) updatePaceConfig(activeSync.c);
-
-      // 6. Clean up URL & state
+      // Clean up URL
       if (window.location.hash.includes('sync=') || window.location.search.includes('sync=')) {
         window.history.replaceState(null, '', window.location.pathname);
       }
       setUrlPendingSync(null);
       if (onClearExternalDelta) onClearExternalDelta();
 
-      // 7. Show success toast and reload
+      // Show instant confirmation toast
       setSuccessToast(true);
       setTimeout(() => {
         setSuccessToast(false);
-        window.location.reload();
-      }, 1000);
+      }, 2500);
     } catch (e) {
       console.error('Failed to apply sync:', e);
       alert('Sync failed. Please ensure the full QR link or code was provided.');
