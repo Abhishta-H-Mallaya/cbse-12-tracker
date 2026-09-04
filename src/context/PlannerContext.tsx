@@ -19,6 +19,7 @@ import {
 } from '../types/planner';
 import { initialSubjects, defaultPaceConfig } from '../data/initialSyllabus';
 import { initialExams, getInitialExamsForYear } from '../data/initialExams';
+import { CompactSyncDelta } from '../utils/syncHelper';
 
 export const DEFAULT_USER_PROFILE: UserProfile = {
   id: 'profile-user-default',
@@ -66,6 +67,14 @@ interface PlannerContextType {
   setShowProfileModal: (show: boolean) => void;
   mobileMenuOpen: boolean;
   setMobileMenuOpen: (open: boolean) => void;
+
+  // QR Sync & Scanner Modals
+  showQrSyncModal: boolean;
+  setShowQrSyncModal: (show: boolean) => void;
+  showQrScannerModal: boolean;
+  setShowQrScannerModal: (show: boolean) => void;
+  incomingSyncData: CompactSyncDelta | null;
+  setIncomingSyncData: (data: CompactSyncDelta | null) => void;
 
   // PWA Install
   isInstallable: boolean;
@@ -149,6 +158,9 @@ export const PlannerProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showQrSyncModal, setShowQrSyncModal] = useState(false);
+  const [showQrScannerModal, setShowQrScannerModal] = useState(false);
+  const [incomingSyncData, setIncomingSyncData] = useState<CompactSyncDelta | null>(null);
 
   const getStorageKey = (key: string) => `cbse12_${currentProfile.id}_${key}`;
 
@@ -857,6 +869,12 @@ export const PlannerProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setShowProfileModal,
         mobileMenuOpen,
         setMobileMenuOpen,
+        showQrSyncModal,
+        setShowQrSyncModal,
+        showQrScannerModal,
+        setShowQrScannerModal,
+        incomingSyncData,
+        setIncomingSyncData,
         isInstallable,
         installApp,
         addExam,

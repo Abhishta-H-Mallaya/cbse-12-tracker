@@ -15,7 +15,8 @@ import {
   Sparkles,
   LayoutDashboard,
   Target,
-  Clock
+  Clock,
+  ScanLine
 } from 'lucide-react';
 import { NavigationTab } from '../types/planner';
 
@@ -28,7 +29,8 @@ export const MobileHeader: React.FC = () => {
     currentProfile, 
     setShowProfileModal,
     installApp,
-    isInstallable
+    isInstallable,
+    setShowQrScannerModal
   } = usePlanner();
 
   const [showSearch, setShowSearch] = useState(false);
@@ -93,6 +95,16 @@ export const MobileHeader: React.FC = () => {
             aria-label="Search"
           >
             <Search className="w-4 h-4" />
+          </button>
+
+          {/* Quick QR Scanner Button */}
+          <button
+            onClick={() => setShowQrScannerModal(true)}
+            className="p-2 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-600 hover:text-white transition"
+            aria-label="Scan QR Code"
+            title="Scan QR Code with Camera"
+          >
+            <ScanLine className="w-4 h-4" />
           </button>
 
           {/* Student Profile Quick Trigger */}

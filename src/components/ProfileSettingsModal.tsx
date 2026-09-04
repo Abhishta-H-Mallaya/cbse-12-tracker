@@ -14,7 +14,9 @@ import {
   Award,
   Users,
   ShieldCheck,
-  ChevronRight
+  ChevronRight,
+  QrCode,
+  ScanLine
 } from 'lucide-react';
 import { ExamTarget } from '../types/planner';
 
@@ -32,7 +34,9 @@ export const ProfileSettingsModal: React.FC = () => {
     exams,
     addExam,
     deleteExam,
-    toggleExamEnabled
+    toggleExamEnabled,
+    setShowQrSyncModal,
+    setShowQrScannerModal
   } = usePlanner();
 
   const [activeTab, setActiveTab] = useState<'details' | 'year_goal' | 'exams' | 'profiles'>('details');
@@ -572,6 +576,41 @@ export const ProfileSettingsModal: React.FC = () => {
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Cross-Device Transfer Banner */}
+              <div className="p-3.5 bg-gradient-to-r from-indigo-950/60 via-purple-950/40 to-slate-950 border border-indigo-500/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
+                <div>
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <QrCode className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Cross-Device Transfer</span>
+                  </h4>
+                  <p className="text-[10px] text-slate-400">Transfer student to another phone or laptop</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileModal(false);
+                      setShowQrSyncModal(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Show QR</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileModal(false);
+                      setShowQrScannerModal(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <ScanLine className="w-3.5 h-3.5" />
+                    <span>Scan QR</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

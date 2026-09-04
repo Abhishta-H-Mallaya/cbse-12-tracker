@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { usePlanner } from '../context/PlannerContext';
-import { decodeSyncPayload, applySyncDeltaToSubjects, CompactSyncDelta } from '../utils/syncHelper';
+import { 
+  decodeSyncPayload, 
+  applySyncDeltaToSubjects, 
+  hydrateExamsFromSync, 
+  CompactSyncDelta 
+} from '../utils/syncHelper';
 import { 
   Smartphone, 
   CheckCircle2, 
@@ -9,10 +14,19 @@ import {
   AlertCircle, 
   Sparkles,
   Calendar,
-  Target
+  Target,
+  RefreshCw
 } from 'lucide-react';
 
-export const SyncReceiverModal: React.FC = () => {
+interface SyncReceiverModalProps {
+  externalDelta?: CompactSyncDelta | null;
+  onClearExternalDelta?: () => void;
+}
+
+export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
+  externalDelta,
+  onClearExternalDelta,
+}) => {
   const { 
     currentProfile, 
     updateCurrentProfile, 
@@ -21,9 +35,10 @@ export const SyncReceiverModal: React.FC = () => {
     exams
   } = usePlanner();
 
-  const [pendingSync, setPendingSync] = useState<CompactSyncDelta | null>(null);
+  const [urlPendingSync, setUrlPendingSync] = useState<CompactSyncDelta | null>(null);
   const [successToast, setSuccessToast] = useState(false);
 
+  // Check URL hash on mount and hash changes
   useEffect(() => {
     const checkHashForSync = () => {
       const hash = window.location.hash;
@@ -31,7 +46,7 @@ export const SyncReceiverModal: React.FC = () => {
         const encodedData = hash.replace('#sync=', '');
         const decoded = decodeSyncPayload(encodedData);
         if (decoded) {
-          setPendingSync(decoded);
+          setUrlPendingSync(decoded);
         }
       }
     };
@@ -41,108 +56,123 @@ export const SyncReceiverModal: React.FC = () => {
     return () => window.removeEventListener('hashchange', checkHashForSync);
   }, []);
 
+  const activeSync = externalDelta || urlPendingSync;
+
   if (successToast) {
     return (
       <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-50 p-4 rounded-2xl bg-emerald-600 text-white shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-fadeIn">
         <CheckCircle2 className="w-5 h-5 text-white" />
-        <span>Successfully synced with Laptop! All records updated.</span>
+        <span>Study records successfully synced! All chapters updated.</span>
       </div>
     );
   }
 
-  if (!pendingSync) return null;
+  if (!activeSync) return null;
 
   const handleConfirmSync = () => {
     try {
       // 1. Update profile info
       updateCurrentProfile({
-        name: pendingSync.p.name,
-        examYear: pendingSync.p.examYear,
-        targetExamDate: pendingSync.p.targetExamDate,
-        fieldGoal: pendingSync.p.fieldGoal,
-        fieldGoals: pendingSync.p.fieldGoals || [pendingSync.p.fieldGoal],
-        stream: pendingSync.p.stream,
-        selectedSubjects: pendingSync.p.selectedSubjects,
+        name: activeSync.p.name,
+        examYear: activeSync.p.examYear,
+        targetExamDate: activeSync.p.targetExamDate,
+        fieldGoal: activeSync.p.fieldGoal,
+        fieldGoals: activeSync.p.fieldGoals || (activeSync.p.fieldGoal ? [activeSync.p.fieldGoal] : ['CBSE Class 12 Boards (95%+)']),
+        stream: activeSync.p.stream,
+        selectedSubjects: activeSync.p.selectedSubjects,
       });
 
       // 2. Update pace config
-      updatePaceConfig(pendingSync.c);
+      if (activeSync.c) {
+        updatePaceConfig(activeSync.c);
+      }
 
       // 3. Save subjects directly with applied delta
-      const updatedSubjects = applySyncDeltaToSubjects(subjects, pendingSync);
-      const profileKey = `cbse12_${pendingSync.p.id}_`;
+      const updatedSubjects = applySyncDeltaToSubjects(subjects, activeSync);
+      const updatedExams = hydrateExamsFromSync(activeSync, exams);
+      const profileKey = `cbse12_${activeSync.p.id}_`;
+
       localStorage.setItem(`${profileKey}subjects`, JSON.stringify(updatedSubjects));
-      localStorage.setItem(`${profileKey}config`, JSON.stringify(pendingSync.c));
-      localStorage.setItem(`${profileKey}logs`, JSON.stringify(pendingSync.l || []));
-      localStorage.setItem(`${profileKey}exams`, JSON.stringify(pendingSync.e || exams));
+      localStorage.setItem(`${profileKey}config`, JSON.stringify(activeSync.c));
+      localStorage.setItem(`${profileKey}logs`, JSON.stringify(activeSync.l || []));
+      localStorage.setItem(`${profileKey}exams`, JSON.stringify(updatedExams));
       localStorage.setItem('cbse12_onboarded', 'true');
 
-      // 4. Clean up URL
-      window.history.replaceState(null, '', window.location.pathname);
-      setPendingSync(null);
+      // 4. Clean up URL & state
+      if (window.location.hash.startsWith('#sync=')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+      setUrlPendingSync(null);
+      if (onClearExternalDelta) onClearExternalDelta();
 
       // 5. Show success and reload state
       setSuccessToast(true);
       setTimeout(() => {
         setSuccessToast(false);
         window.location.reload();
-      }, 1500);
+      }, 1200);
     } catch (e) {
       console.error('Failed to apply sync:', e);
-      alert('Sync failed. Please ensure the full QR link was copied.');
+      alert('Sync failed. Please ensure the full QR link or code was provided.');
     }
   };
 
   const handleDismiss = () => {
-    window.history.replaceState(null, '', window.location.pathname);
-    setPendingSync(null);
+    if (window.location.hash.startsWith('#sync=')) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    setUrlPendingSync(null);
+    if (onClearExternalDelta) onClearExternalDelta();
   };
 
   // Count solved exercises in delta
-  const solvedCount = Object.values(pendingSync.ex).reduce((acc, curr) => acc + curr.comp, 0);
+  const solvedCount = activeSync.ex 
+    ? Object.values(activeSync.ex).reduce((acc, curr) => acc + curr.comp, 0)
+    : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
-      <div className="bg-slate-900 border border-indigo-500/60 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
+      <div className="bg-slate-900 border border-emerald-500/60 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
+        {/* Header */}
         <div className="flex items-center space-x-3 pb-3 border-b border-slate-800">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-teal-600/30">
             <Smartphone className="w-6 h-6" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <h3 className="text-base font-extrabold text-white">Incoming Sync from Laptop</h3>
+              <h3 className="text-base font-extrabold text-white">Incoming Study Sync</h3>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 animate-pulse">
-                QR Detected
+                QR Verified
               </span>
             </div>
-            <p className="text-xs text-slate-400">Sync latest study progress to this phone?</p>
+            <p className="text-xs text-slate-400">Transfer student records to this device?</p>
           </div>
         </div>
 
         {/* Sync Summary Card */}
         <div className="p-4 bg-slate-950/70 rounded-2xl border border-slate-800 space-y-2 text-xs">
           <div className="flex justify-between items-center">
-            <span className="text-slate-400 font-semibold">Student:</span>
-            <strong className="text-white text-sm">{pendingSync.p.name}</strong>
+            <span className="text-slate-400 font-semibold">Student Name:</span>
+            <strong className="text-white text-sm">{activeSync.p.name}</strong>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-400 font-semibold">Examination Year:</span>
-            <strong className="text-indigo-300 font-mono font-bold">{pendingSync.p.examYear} Batch</strong>
+            <span className="text-slate-400 font-semibold">Examination Batch:</span>
+            <strong className="text-indigo-300 font-mono font-bold">{activeSync.p.examYear} Batch</strong>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-slate-400 font-semibold">Target Goals:</span>
-            <span className="text-white text-right font-medium truncate max-w-[200px]">
-              {pendingSync.p.fieldGoal}
+            <span className="text-white text-right font-medium truncate max-w-[210px]">
+              {activeSync.p.fieldGoal || (activeSync.p.fieldGoals ? activeSync.p.fieldGoals.join(' • ') : 'CBSE Boards')}
             </span>
           </div>
           <div className="flex justify-between items-center pt-2 border-t border-slate-800 font-mono">
             <span className="text-slate-400">Questions Solved:</span>
-            <strong className="text-emerald-400 font-bold text-sm">{solvedCount} Qs</strong>
+            <strong className="text-emerald-400 font-bold text-sm">{solvedCount} Questions</strong>
           </div>
         </div>
 
         <p className="text-[11px] text-slate-400">
-          Accepting this sync will update your phone's study tracker with the latest ticks and exercises from your laptop.
+          Accepting this sync will update this device with the latest questions solved, revision tags, and custom exams from the source device.
         </p>
 
         {/* Buttons */}
@@ -155,7 +185,7 @@ export const SyncReceiverModal: React.FC = () => {
           </button>
           <button
             onClick={handleConfirmSync}
-            className="py-2.5 px-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition"
+            className="py-2.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-teal-600/30 flex items-center justify-center gap-1.5 transition"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>Accept &amp; Sync</span>

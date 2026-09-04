@@ -14,6 +14,8 @@ import { BiologyTracker } from './components/BiologyTracker';
 import { EnglishTracker } from './components/EnglishTracker';
 import { StudyPacePlanner } from './components/StudyPacePlanner';
 import { SyncReceiverModal } from './components/SyncReceiverModal';
+import { QrSyncModal } from './components/QrSyncModal';
+import { QrScannerModal } from './components/QrScannerModal';
 
 const MainContent: React.FC = () => {
   const { activeTab } = usePlanner();
@@ -35,7 +37,15 @@ const MainContent: React.FC = () => {
 };
 
 const AppShell: React.FC = () => {
-  const { currentProfile } = usePlanner();
+  const { 
+    currentProfile,
+    showQrSyncModal,
+    setShowQrSyncModal,
+    showQrScannerModal,
+    setShowQrScannerModal,
+    incomingSyncData,
+    setIncomingSyncData
+  } = usePlanner();
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans selection:bg-indigo-500 selection:text-white">
@@ -74,8 +84,25 @@ const AppShell: React.FC = () => {
       {/* 5. Profile & Year Management Modal */}
       <ProfileSettingsModal />
 
-      {/* 6. Instant Phone Sync Receiver Modal */}
-      <SyncReceiverModal />
+      {/* 6. QR Sync Modal (Show QR Code) */}
+      <QrSyncModal 
+        isOpen={showQrSyncModal} 
+        onClose={() => setShowQrSyncModal(false)} 
+        onOpenScanner={() => setShowQrScannerModal(true)}
+      />
+
+      {/* 7. QR Scanner Modal (Camera & Image Upload) */}
+      <QrScannerModal 
+        isOpen={showQrScannerModal} 
+        onClose={() => setShowQrScannerModal(false)} 
+        onScanSuccess={(delta) => setIncomingSyncData(delta)}
+      />
+
+      {/* 8. Incoming Phone/Device Sync Receiver Modal */}
+      <SyncReceiverModal 
+        externalDelta={incomingSyncData} 
+        onClearExternalDelta={() => setIncomingSyncData(null)} 
+      />
     </div>
   );
 };

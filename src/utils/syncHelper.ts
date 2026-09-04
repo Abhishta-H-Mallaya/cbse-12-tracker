@@ -1,3 +1,5 @@
+import LZString from 'lz-string';
+import jsQR from 'jsqr';
 import { 
   UserProfile, 
   Subject, 
@@ -7,13 +9,18 @@ import {
   QuestionStatus,
   DifficultyLevel
 } from '../types/planner';
+import { getInitialExamsForYear } from '../data/initialExams';
 
 export interface CompactSyncDelta {
-  v: number; // version
+  v: number; // version 3
   p: UserProfile;
   c: PlannerPaceConfig;
-  l: DailyActivityLog[];
-  e: ExamTarget[];
+  l?: DailyActivityLog[];
+  // Delta for exams (instead of sending full static array)
+  ce?: ExamTarget[]; // Custom added exams
+  de?: string[];     // Disabled exam IDs
+  re?: string[];     // Registered exam IDs
+  e?: ExamTarget[];  // Legacy full exam fallback if present
   // Delta map of chapters
   ch: Record<string, { cov?: boolean; rev?: number }>;
   // Delta map of exercises: exerciseId -> { comp: number, diff?: number, rew?: number, qs?: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }> }
@@ -25,7 +32,7 @@ export interface CompactSyncDelta {
   }>;
 }
 
-// Generate a lightweight delta payload (under 2KB) that fits easily in a camera-scannable QR code
+// Generate an ultra-compact delta payload (<800 bytes) compressed with LZString
 export function createSyncPayload(
   profile: UserProfile,
   subjects: Subject[],
@@ -73,33 +80,191 @@ export function createSyncPayload(
     });
   });
 
+  // Distinguish custom exams from default standard ones
+  const standardExamIds = [
+    'exam-cbse-boards', 
+    'exam-cbse-practicals', 
+    'exam-preboard-1', 
+    'exam-preboard-2', 
+    'exam-jee-session-1', 
+    'exam-jee-session-2', 
+    'exam-neet-ug', 
+    'exam-cuet-ug', 
+    'exam-bitsat'
+  ];
+
+  const customExams = exams.filter(e => 
+    e.id.startsWith('custom-') || 
+    e.category === 'Other' || 
+    !standardExamIds.includes(e.id)
+  );
+
+  const disabledExamIds = exams.filter(e => !e.enabled).map(e => e.id);
+  const registeredExamIds = exams.filter(e => e.registered).map(e => e.id);
+
+  // Keep last 14 activity logs for compact size
+  const recentLogs = (activityLogs || []).slice(-14);
+
   const delta: CompactSyncDelta = {
-    v: 2,
+    v: 3,
     p: profile,
     c: paceConfig,
-    l: activityLogs,
-    e: exams,
+    l: recentLogs,
+    ce: customExams.length > 0 ? customExams : undefined,
+    de: disabledExamIds.length > 0 ? disabledExamIds : undefined,
+    re: registeredExamIds.length > 0 ? registeredExamIds : undefined,
     ch: chDelta,
     ex: exDelta,
   };
 
   const jsonStr = JSON.stringify(delta);
-  // Base64 encode for URL hash
-  return btoa(unescape(encodeURIComponent(jsonStr)));
+  // Compress using LZ-String for maximum QR readability & small payload
+  return LZString.compressToEncodedURIComponent(jsonStr);
 }
 
-// Decode and parse payload from URL hash
+// Decode and parse payload from URL hash or direct code
 export function decodeSyncPayload(encoded: string): CompactSyncDelta | null {
+  if (!encoded || typeof encoded !== 'string') return null;
+  const cleanInput = encoded.trim();
+
+  // 1. Try LZString decompression (v3)
   try {
-    const jsonStr = decodeURIComponent(escape(atob(encoded)));
+    const decompressed = LZString.decompressFromEncodedURIComponent(cleanInput);
+    if (decompressed) {
+      const parsed = JSON.parse(decompressed);
+      if (parsed && parsed.p && parsed.p.name) {
+        return parsed as CompactSyncDelta;
+      }
+    }
+  } catch {}
+
+  // 2. Try legacy base64 decoding (v1 / v2 fallback)
+  try {
+    const jsonStr = decodeURIComponent(escape(atob(cleanInput)));
     const parsed = JSON.parse(jsonStr);
     if (parsed && parsed.p && parsed.p.name) {
       return parsed as CompactSyncDelta;
     }
-  } catch (e) {
-    console.error('Failed to decode sync payload:', e);
-  }
+  } catch {}
+
   return null;
+}
+
+// Extract and decode sync delta from any user input (full URL, hash, or raw code)
+export function parseAnySyncInput(input: string): CompactSyncDelta | null {
+  if (!input) return null;
+  let code = input.trim();
+
+  // Check if it's a URL containing #sync= or ?sync=
+  if (code.includes('#sync=')) {
+    code = code.split('#sync=')[1];
+  } else if (code.includes('sync=')) {
+    code = code.split('sync=')[1];
+  }
+
+  // Remove any trailing parameters or hashes if present
+  code = code.split('&')[0];
+
+  return decodeSyncPayload(code);
+}
+
+// Hydrate exams for a received sync
+export function hydrateExamsFromSync(delta: CompactSyncDelta, currentExams: ExamTarget[]): ExamTarget[] {
+  // If full legacy exams array exists in payload, use it
+  if (delta.e && Array.isArray(delta.e) && delta.e.length > 0) {
+    return delta.e;
+  }
+
+  const examYear = delta.p.examYear || '2027';
+  const baseExams = getInitialExamsForYear(examYear);
+
+  // Apply disabled status
+  const disabledSet = new Set(delta.de || []);
+  const registeredSet = new Set(delta.re || []);
+
+  const merged = baseExams.map(ex => ({
+    ...ex,
+    enabled: !disabledSet.has(ex.id),
+    registered: registeredSet.has(ex.id) || ex.registered,
+  }));
+
+  // Append custom exams
+  if (delta.ce && Array.isArray(delta.ce)) {
+    delta.ce.forEach(customEx => {
+      if (!merged.some(m => m.id === customEx.id)) {
+        merged.push(customEx);
+      }
+    });
+  }
+
+  return merged;
+}
+
+// Scan an image file or blob (e.g. screenshot or photo) for a QR code using jsQR
+export async function scanImageForQr(file: Blob | File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const attemptScan = (targetWidth: number, targetHeight: number): string | null => {
+          const canvas = document.createElement('canvas');
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return null;
+          ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+          const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth',
+          });
+          return code ? code.data : null;
+        };
+
+        // 1. Try original resolution
+        let result = attemptScan(img.naturalWidth, img.naturalHeight);
+        if (result) return resolve(result);
+
+        // 2. If high resolution photo (>1000px), downsample to 900px for faster & cleaner detection
+        if (img.naturalWidth > 1000 || img.naturalHeight > 1000) {
+          const maxDim = 900;
+          const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight);
+          result = attemptScan(Math.round(img.naturalWidth * scale), Math.round(img.naturalHeight * scale));
+          if (result) return resolve(result);
+        }
+
+        // 3. Try downsample to 600px
+        const scale600 = Math.min(600 / img.naturalWidth, 600 / img.naturalHeight);
+        result = attemptScan(Math.round(img.naturalWidth * scale600), Math.round(img.naturalHeight * scale600));
+        resolve(result);
+      };
+      img.onerror = () => resolve(null);
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Play pleasant confirmation audio chime on successful scan using Web Audio API
+export function playScanSuccessBeep() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    // Melodic 2-tone chime (D5 -> A5)
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.22);
+  } catch {}
 }
 
 // Apply delta to subject list
@@ -109,7 +274,7 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
     units: sub.units.map(unit => ({
       ...unit,
       chapters: unit.chapters.map(ch => {
-        const chD = delta.ch[ch.id];
+        const chD = delta.ch ? delta.ch[ch.id] : undefined;
         const updatedChapter = chD ? {
           ...ch,
           syllabusCovered: chD.cov ?? ch.syllabusCovered,
@@ -119,7 +284,7 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
         return {
           ...updatedChapter,
           exercises: updatedChapter.exercises.map(ex => {
-            const exD = delta.ex[ex.id];
+            const exD = delta.ex ? delta.ex[ex.id] : undefined;
             if (!exD) return ex;
 
             const updatedQuestions = ex.questions.map(q => {
