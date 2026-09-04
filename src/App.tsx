@@ -13,6 +13,7 @@ import { ChemistryTracker } from './components/ChemistryTracker';
 import { BiologyTracker } from './components/BiologyTracker';
 import { EnglishTracker } from './components/EnglishTracker';
 import { StudyPacePlanner } from './components/StudyPacePlanner';
+import { SyncReceiverModal } from './components/SyncReceiverModal';
 
 const MainContent: React.FC = () => {
   const { activeTab } = usePlanner();
@@ -72,6 +73,9 @@ const AppShell: React.FC = () => {
 
       {/* 5. Profile & Year Management Modal */}
       <ProfileSettingsModal />
+
+      {/* 6. Instant Phone Sync Receiver Modal */}
+      <SyncReceiverModal />
     </div>
   );
 };

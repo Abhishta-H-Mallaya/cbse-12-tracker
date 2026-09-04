@@ -3,8 +3,10 @@ import { usePlanner } from '../context/PlannerContext';
 import { SubjectId, NavigationTab } from '../types/planner';
 import { getSubjectStats } from '../utils/calculations';
 import { InstallGuideModal } from './InstallGuideModal';
+import { QrSyncModal } from './QrSyncModal';
 import { 
-  LayoutDashboard, 
+  LayoutDashboard,
+  QrCode, 
   Calculator, 
   Zap, 
   FlaskConical, 
@@ -48,6 +50,7 @@ export const Sidebar: React.FC = () => {
   } = usePlanner();
 
   const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const [showQrSync, setShowQrSync] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleInstallClick = () => {
@@ -327,6 +330,16 @@ export const Sidebar: React.FC = () => {
             <span>Install Mobile App</span>
           </button>
 
+          {/* Sync to Phone (QR Code) Button */}
+          <button
+            onClick={() => setShowQrSync(true)}
+            className="w-full py-2 px-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-950/40 transition"
+            title="Point your phone camera to sync study records in 3 seconds"
+          >
+            <QrCode className="w-4 h-4" />
+            <span>Sync to Phone (QR Code)</span>
+          </button>
+
           {/* Backup, Restore, Reset */}
           <div className="grid grid-cols-3 gap-1.5 text-slate-400 text-xs">
             <input
@@ -369,6 +382,12 @@ export const Sidebar: React.FC = () => {
       <InstallGuideModal 
         isOpen={showInstallGuide} 
         onClose={() => setShowInstallGuide(false)} 
+      />
+
+      {/* QR Code Sync Modal */}
+      <QrSyncModal 
+        isOpen={showQrSync} 
+        onClose={() => setShowQrSync(false)} 
       />
     </>
   );
