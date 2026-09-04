@@ -25,13 +25,24 @@ import {
   FlaskConical,
   Dna,
   Feather,
-  Sparkles
+  Sparkles,
+  QrCode,
+  ScanLine
 } from 'lucide-react';
 import { SubjectId } from '../types/planner';
 import { ExamCountdownTracker } from './ExamCountdownTracker';
 
 export const Dashboard: React.FC = () => {
-  const { subjects, paceConfig, updatePaceConfig, activityLogs, setActiveTab } = usePlanner();
+  const { 
+    subjects, 
+    paceConfig, 
+    updatePaceConfig, 
+    activityLogs, 
+    setActiveTab,
+    currentProfile,
+    setShowQrSyncModal,
+    setShowQrScannerModal
+  } = usePlanner();
 
   // 1. Four Core Pillars (Rule 8)
   const pillars = getCorePillars(subjects, paceConfig);
@@ -80,6 +91,46 @@ export const Dashboard: React.FC = () => {
     <div className="space-y-8 pb-16">
       {/* EXAM COUNTDOWN & ADDITIONAL EXAMS TRACKER (Placed on top of dashboard) */}
       <ExamCountdownTracker />
+
+      {/* QUICK CROSS-DEVICE SYNC BANNER */}
+      <div className="p-3.5 sm:p-4 bg-gradient-to-r from-indigo-950/70 via-purple-950/40 to-slate-900 border border-indigo-500/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg shadow-indigo-950/20">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 shrink-0">
+            <QrCode className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <h3 className="text-xs sm:text-sm font-bold text-white">Cross-Device Progress Sync</h3>
+              <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Phone ↔ Laptop
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Transfer {currentProfile.name}'s study records between phone and laptop instantly via QR or link.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setShowQrSyncModal(true)}
+            className="px-3 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-950/40 transition"
+            title="Display QR code to scan with phone"
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span>Show QR Code</span>
+          </button>
+
+          <button
+            onClick={() => setShowQrScannerModal(true)}
+            className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition"
+            title="Scan QR with camera or upload image"
+          >
+            <ScanLine className="w-3.5 h-3.5" />
+            <span>Scan QR / Image</span>
+          </button>
+        </div>
+      </div>
 
       {/* 4 CORE PILLARS BANNER (Rule 8: Multi-level completion calculation) */}
       <div className="space-y-3">

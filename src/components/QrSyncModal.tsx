@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { usePlanner } from '../context/PlannerContext';
-import { QRCodeCanvas } from 'qrcode.react';
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
 import { createSyncPayload } from '../utils/syncHelper';
 import { 
   QrCode, 
@@ -13,7 +13,8 @@ import {
   Download,
   Send,
   ScanLine,
-  ExternalLink
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react';
 
 interface QrSyncModalProps {
@@ -34,8 +35,13 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
 
   if (!isOpen) return null;
 
+  const studentName = currentProfile?.name || 'Student';
+  const studentYear = currentProfile?.examYear || '2027';
+  const studentGoal = currentProfile?.fieldGoal || 'Class 12 Boards';
+
   // Generate the ultra-compact compressed payload
   let encodedPayload = '';
+  let payloadError = false;
   try {
     encodedPayload = createSyncPayload(
       currentProfile,
@@ -46,6 +52,7 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
     );
   } catch (err) {
     console.error('Failed to generate sync payload:', err);
+    payloadError = true;
   }
 
   // Generate full sync URL
@@ -54,11 +61,11 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
 
   // Count total solved questions
   let totalSolved = 0;
-  subjects.forEach(s => {
-    s.units.forEach(u => {
-      u.chapters.forEach(c => {
-        c.exercises.forEach(e => {
-          totalSolved += e.completedQuestions;
+  (subjects || []).forEach(s => {
+    (s?.units || []).forEach(u => {
+      (u?.chapters || []).forEach(c => {
+        (c?.exercises || []).forEach(e => {
+          totalSolved += (e?.completedQuestions || 0);
         });
       });
     });
@@ -72,7 +79,7 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
 
   const handleWhatsAppShare = () => {
     const text = encodeURIComponent(
-      `🎯 CBSE 12 Study Tracker Sync for ${currentProfile.name} (${currentProfile.examYear} Batch):\n${syncUrl}`
+      `🎯 CBSE 12 Study Tracker Sync for ${studentName} (${studentYear} Batch):\n${syncUrl}`
     );
     window.open(`https://wa.me/?text=${text}`, '_blank');
   };
@@ -80,16 +87,24 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
   // Download QR code as PNG image
   const handleDownloadQrImage = () => {
     const canvas = canvasContainerRef.current?.querySelector('canvas');
-    if (!canvas) return;
+    if (!canvas) {
+      navigator.clipboard.writeText(syncUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+      return;
+    }
 
-    const dataUrl = canvas.toDataURL('image/png');
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    link.download = `${currentProfile.name.toLowerCase().replace(/\s+/g, '_')}_study_qr.png`;
-    link.click();
-
-    setDownloadNotice(true);
-    setTimeout(() => setDownloadNotice(false), 2500);
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `${studentName.toLowerCase().replace(/\s+/g, '_')}_study_qr.png`;
+      link.click();
+      setDownloadNotice(true);
+      setTimeout(() => setDownloadNotice(false), 2500);
+    } catch (e) {
+      console.error('Failed to download QR image:', e);
+    }
   };
 
   return (
@@ -118,13 +133,13 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
         <div className="p-3 bg-indigo-950/40 border border-indigo-500/40 rounded-2xl flex items-center justify-between text-xs">
           <div>
             <div className="flex items-center space-x-1.5">
-              <span className="font-bold text-white text-sm">{currentProfile.name}</span>
+              <span className="font-bold text-white text-sm">{studentName}</span>
               <span className="px-1.5 py-0.5 rounded font-mono text-[10px] bg-indigo-500/20 text-indigo-300 font-bold">
-                {currentProfile.examYear} Batch
+                {studentYear} Batch
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate max-w-[210px] mt-0.5">
-              {currentProfile.fieldGoal || 'Class 12 Boards'}
+              {studentGoal}
             </p>
           </div>
 
@@ -135,23 +150,33 @@ export const QrSyncModal: React.FC<QrSyncModalProps> = ({
         </div>
 
         {/* QR Code Container */}
-        <div 
-          ref={canvasContainerRef}
-          className="flex flex-col items-center justify-center p-5 bg-white rounded-3xl shadow-2xl mx-auto w-fit border-4 border-indigo-500/30"
-        >
-          {encodedPayload ? (
-            <QRCodeCanvas 
-              value={syncUrl} 
-              size={220} 
-              level="L" 
-              marginSize={1}
-            />
+        <div className="flex flex-col items-center justify-center p-4 bg-white rounded-3xl shadow-2xl mx-auto w-fit border-4 border-indigo-500/30">
+          {encodedPayload && !payloadError ? (
+            <div className="relative flex flex-col items-center">
+              {/* Primary Vector SVG: 100% reliable across all browsers & screen DPIs */}
+              <QRCodeSVG 
+                value={syncUrl} 
+                size={220} 
+                level="L" 
+                marginSize={1}
+              />
+              {/* Hidden High-Res Canvas for PNG image download */}
+              <div className="hidden" ref={canvasContainerRef}>
+                <QRCodeCanvas 
+                  value={syncUrl} 
+                  size={512} 
+                  level="L" 
+                  marginSize={2}
+                />
+              </div>
+            </div>
           ) : (
-            <div className="w-48 h-48 flex items-center justify-center text-slate-600 text-xs font-semibold">
-              Generating QR Code...
+            <div className="w-52 h-52 flex flex-col items-center justify-center text-slate-700 text-xs font-semibold p-4 text-center">
+              <p className="text-slate-900 font-bold mb-1">Direct Sync Link Available</p>
+              <p className="text-slate-600 text-[11px]">Use the "Copy Sync Link" button below to transfer your progress instantly.</p>
             </div>
           )}
-          <span className="text-[11px] text-slate-600 font-mono mt-2 font-bold tracking-wider uppercase">
+          <span className="text-[11px] text-slate-700 font-mono mt-2 font-bold tracking-wider uppercase">
             Point Camera or Scanner
           </span>
         </div>

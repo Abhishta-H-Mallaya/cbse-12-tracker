@@ -16,7 +16,8 @@ import {
   LayoutDashboard,
   Target,
   Clock,
-  ScanLine
+  ScanLine,
+  QrCode
 } from 'lucide-react';
 import { NavigationTab } from '../types/planner';
 
@@ -30,6 +31,7 @@ export const MobileHeader: React.FC = () => {
     setShowProfileModal,
     installApp,
     isInstallable,
+    setShowQrSyncModal,
     setShowQrScannerModal
   } = usePlanner();
 
@@ -95,6 +97,16 @@ export const MobileHeader: React.FC = () => {
             aria-label="Search"
           >
             <Search className="w-4 h-4" />
+          </button>
+
+          {/* Quick Show QR Code Button */}
+          <button
+            onClick={() => setShowQrSyncModal(true)}
+            className="p-2 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/40 hover:bg-indigo-600 hover:text-white transition"
+            aria-label="Show QR Code"
+            title="Show My QR Code"
+          >
+            <QrCode className="w-4 h-4" />
           </button>
 
           {/* Quick QR Scanner Button */}

@@ -55,7 +55,78 @@ export interface CompactSyncDelta {
   ex: Record<string, CompactExerciseDelta>;
 }
 
-// Generate an ultra-compact delta payload (<1KB) compressed with LZString
+// Helper to determine whether a chapter actually has any user progress
+export function hasRealChapterProgress(ch: Chapter): boolean {
+  if (ch.syllabusCovered) return true;
+  if (ch.revisionCount && ch.revisionCount > 0) return true;
+  if (ch.workedExamplesCompleted && ch.workedExamplesCompleted > 0) return true;
+
+  if (ch.questionSources) {
+    for (const src of Object.values(ch.questionSources)) {
+      if (src && typeof src === 'object' && src.completed > 0) return true;
+    }
+  }
+
+  const pd = ch.physicsDetails;
+  if (pd) {
+    if ((pd.numericalQuestions?.completed ?? 0) > 0) return true;
+    if ((pd.conceptualQuestions?.completed ?? 0) > 0) return true;
+    if ((pd.derivationQuestions?.completed ?? 0) > 0) return true;
+    if ((pd.difficultCount ?? 0) > 0) return true;
+    if ((pd.revisionRequiredCount ?? 0) > 0) return true;
+    if ((pd.pyqsCompleted ?? 0) > 0) return true;
+    if ((pd.guideCompleted ?? 0) > 0) return true;
+    if ((pd.tuitionCompleted ?? 0) > 0) return true;
+  }
+
+  const cd = ch.chemistryDetails;
+  if (cd) {
+    if ((cd.numericalProblems?.completed ?? 0) > 0) return true;
+    if ((cd.reactionBasedQuestions?.completed ?? 0) > 0) return true;
+    if ((cd.theoryConceptQuestions?.completed ?? 0) > 0) return true;
+    if ((cd.memorisationQuestions?.completed ?? 0) > 0) return true;
+    if ((cd.difficultCount ?? 0) > 0) return true;
+    if ((cd.revisionRequiredCount ?? 0) > 0) return true;
+  }
+
+  const bd = ch.biologyDetails;
+  if (bd) {
+    if ((bd.diagrams?.completed ?? 0) > 0) return true;
+    if ((bd.terminology?.completed ?? 0) > 0) return true;
+    if ((bd.caseBasedAssertion?.completed ?? 0) > 0) return true;
+    if ((bd.difficultCount ?? 0) > 0) return true;
+    if ((bd.revisionRequiredCount ?? 0) > 0) return true;
+    if ((bd.pyqsCompleted ?? 0) > 0) return true;
+    if ((bd.guideCompleted ?? 0) > 0) return true;
+    if ((bd.tuitionCompleted ?? 0) > 0) return true;
+  }
+
+  const epd = ch.englishProseDetails;
+  if (epd) {
+    if (epd.firstReading || epd.secondReading) return true;
+    if (epd.storyUnderstood && epd.storyUnderstood !== 'Not Started') return true;
+    if ((epd.revisionCount ?? 0) > 0) return true;
+    if ((epd.textbookQuestions?.completed ?? 0) > 0) return true;
+    if ((epd.tuitionQuestions?.completed ?? 0) > 0) return true;
+    if ((epd.guideQuestions?.completed ?? 0) > 0) return true;
+    if ((epd.pyqs?.completed ?? 0) > 0) return true;
+    if (epd.difficultWords && epd.difficultWords.length > 0) return true;
+    if (epd.charactersStudied || epd.themesStudied || epd.importantEvents || epd.messageTheme) return true;
+  }
+
+  const em = ch.englishPoemDetails;
+  if (em) {
+    if (em.poemReading) return true;
+    if ((em.revisionCount ?? 0) > 0) return true;
+    if ((em.textbookQuestions?.completed ?? 0) > 0) return true;
+    if ((em.pyqs?.completed ?? 0) > 0) return true;
+    if (em.stanzaMeanings || em.centralIdea || em.themes || em.poeticDevices || em.ownInterpretation) return true;
+  }
+
+  return false;
+}
+
+// Generate an ultra-compact delta payload (<800 bytes) compressed with LZString
 export function createSyncPayload(
   profile: UserProfile,
   subjects: Subject[],
@@ -63,71 +134,167 @@ export function createSyncPayload(
   activityLogs: DailyActivityLog[],
   exams: ExamTarget[]
 ): string {
+  const safeProfile = profile || {
+    id: 'profile-user-default',
+    name: 'Student',
+    examYear: '2027',
+    targetExamDate: '2027-02-15',
+    fieldGoal: 'CBSE Class 12 Boards (95%+)',
+    fieldGoals: ['CBSE Class 12 Boards (95%+)'],
+    stream: 'PCMB',
+    selectedSubjects: ['mathematics', 'physics', 'chemistry', 'biology', 'english_prose', 'english_poetry', 'english_vistas'],
+    createdAt: '2026-09-01T00:00:00.000Z',
+  };
+  const safeSubjects = subjects || [];
+  const safeLogs = activityLogs || [];
+  const safeExams = exams || [];
+
   const chDelta: CompactSyncDelta['ch'] = {};
   const exDelta: CompactSyncDelta['ex'] = {};
 
-  subjects.forEach(sub => {
+  safeSubjects.forEach(sub => {
+    if (!sub || !sub.units) return;
     sub.units.forEach(unit => {
+      if (!unit || !unit.chapters) return;
       unit.chapters.forEach(ch => {
-        // Check if chapter has any progress across all subjects (Math, Physics, Chem, Bio, English)
-        const hasChapterProgress = 
-          ch.syllabusCovered || 
-          (ch.revisionCount && ch.revisionCount > 0) ||
-          (ch.workedExamplesCompleted && ch.workedExamplesCompleted > 0) ||
-          ch.physicsDetails !== undefined ||
-          ch.chemistryDetails !== undefined ||
-          ch.biologyDetails !== undefined ||
-          ch.englishProseDetails !== undefined ||
-          ch.englishPoemDetails !== undefined ||
-          (ch.questionSources && Object.values(ch.questionSources).some(s => s.completed > 0));
+        if (!ch) return;
 
-        if (hasChapterProgress) {
-          chDelta[ch.id] = {
-            ...(ch.syllabusCovered ? { cov: true } : {}),
-            ...(ch.revisionCount > 0 ? { rev: ch.revisionCount } : {}),
-            ...(ch.workedExamplesCompleted > 0 ? { we: ch.workedExamplesCompleted } : {}),
-            ...(ch.questionSources ? { qs: ch.questionSources } : {}),
-            ...(ch.physicsDetails ? { pd: ch.physicsDetails } : {}),
-            ...(ch.chemistryDetails ? { cd: ch.chemistryDetails } : {}),
-            ...(ch.biologyDetails ? { bd: ch.biologyDetails } : {}),
-            ...(ch.englishProseDetails ? { epd: ch.englishProseDetails } : {}),
-            ...(ch.englishPoemDetails ? { em: ch.englishPoemDetails } : {}),
-          };
+        // Only include chapter in delta if user made REAL progress
+        if (hasRealChapterProgress(ch)) {
+          const chItem: CompactChapterDelta = {};
+          if (ch.syllabusCovered) chItem.cov = true;
+          if (ch.revisionCount && ch.revisionCount > 0) chItem.rev = ch.revisionCount;
+          if (ch.workedExamplesCompleted && ch.workedExamplesCompleted > 0) chItem.we = ch.workedExamplesCompleted;
+
+          if (ch.questionSources) {
+            const qsDelta: Partial<QuestionSources> = {};
+            let hasQs = false;
+            for (const [key, val] of Object.entries(ch.questionSources)) {
+              if (val && typeof val === 'object' && val.completed > 0) {
+                (qsDelta as any)[key] = { completed: val.completed };
+                hasQs = true;
+              }
+            }
+            if (hasQs) chItem.qs = qsDelta;
+          }
+
+          if (ch.physicsDetails) {
+            const pd = ch.physicsDetails;
+            const pdDelta: any = {};
+            let hasPd = false;
+            if ((pd.numericalQuestions?.completed ?? 0) > 0) { pdDelta.numericalQuestions = { completed: pd.numericalQuestions.completed }; hasPd = true; }
+            if ((pd.conceptualQuestions?.completed ?? 0) > 0) { pdDelta.conceptualQuestions = { completed: pd.conceptualQuestions.completed }; hasPd = true; }
+            if ((pd.derivationQuestions?.completed ?? 0) > 0) { pdDelta.derivationQuestions = { completed: pd.derivationQuestions.completed }; hasPd = true; }
+            if ((pd.difficultCount ?? 0) > 0) { pdDelta.difficultCount = pd.difficultCount; hasPd = true; }
+            if ((pd.revisionRequiredCount ?? 0) > 0) { pdDelta.revisionRequiredCount = pd.revisionRequiredCount; hasPd = true; }
+            if ((pd.pyqsCompleted ?? 0) > 0) { pdDelta.pyqsCompleted = pd.pyqsCompleted; hasPd = true; }
+            if ((pd.guideCompleted ?? 0) > 0) { pdDelta.guideCompleted = pd.guideCompleted; hasPd = true; }
+            if ((pd.tuitionCompleted ?? 0) > 0) { pdDelta.tuitionCompleted = pd.tuitionCompleted; hasPd = true; }
+            if (hasPd) chItem.pd = pdDelta;
+          }
+
+          if (ch.chemistryDetails) {
+            const cd = ch.chemistryDetails;
+            const cdDelta: any = {};
+            let hasCd = false;
+            if ((cd.numericalProblems?.completed ?? 0) > 0) { cdDelta.numericalProblems = { completed: cd.numericalProblems.completed }; hasCd = true; }
+            if ((cd.reactionBasedQuestions?.completed ?? 0) > 0) { cdDelta.reactionBasedQuestions = { completed: cd.reactionBasedQuestions.completed }; hasCd = true; }
+            if ((cd.theoryConceptQuestions?.completed ?? 0) > 0) { cdDelta.theoryConceptQuestions = { completed: cd.theoryConceptQuestions.completed }; hasCd = true; }
+            if ((cd.memorisationQuestions?.completed ?? 0) > 0) { cdDelta.memorisationQuestions = { completed: cd.memorisationQuestions.completed }; hasCd = true; }
+            if ((cd.difficultCount ?? 0) > 0) { cdDelta.difficultCount = cd.difficultCount; hasCd = true; }
+            if ((cd.revisionRequiredCount ?? 0) > 0) { cdDelta.revisionRequiredCount = cd.revisionRequiredCount; hasCd = true; }
+            if (hasCd) chItem.cd = cdDelta;
+          }
+
+          if (ch.biologyDetails) {
+            const bd = ch.biologyDetails;
+            const bdDelta: any = {};
+            let hasBd = false;
+            if ((bd.diagrams?.completed ?? 0) > 0) { bdDelta.diagrams = { completed: bd.diagrams.completed }; hasBd = true; }
+            if ((bd.terminology?.completed ?? 0) > 0) { bdDelta.terminology = { completed: bd.terminology.completed }; hasBd = true; }
+            if ((bd.caseBasedAssertion?.completed ?? 0) > 0) { bdDelta.caseBasedAssertion = { completed: bd.caseBasedAssertion.completed }; hasBd = true; }
+            if ((bd.difficultCount ?? 0) > 0) { bdDelta.difficultCount = bd.difficultCount; hasBd = true; }
+            if ((bd.revisionRequiredCount ?? 0) > 0) { bdDelta.revisionRequiredCount = bd.revisionRequiredCount; hasBd = true; }
+            if ((bd.pyqsCompleted ?? 0) > 0) { bdDelta.pyqsCompleted = bd.pyqsCompleted; hasBd = true; }
+            if ((bd.guideCompleted ?? 0) > 0) { bdDelta.guideCompleted = bd.guideCompleted; hasBd = true; }
+            if ((bd.tuitionCompleted ?? 0) > 0) { bdDelta.tuitionCompleted = bd.tuitionCompleted; hasBd = true; }
+            if (hasBd) chItem.bd = bdDelta;
+          }
+
+          if (ch.englishProseDetails) {
+            const epd = ch.englishProseDetails;
+            const epdDelta: any = {};
+            let hasEpd = false;
+            if (epd.firstReading) { epdDelta.firstReading = true; hasEpd = true; }
+            if (epd.secondReading) { epdDelta.secondReading = true; hasEpd = true; }
+            if (epd.storyUnderstood && epd.storyUnderstood !== 'Not Started') { epdDelta.storyUnderstood = epd.storyUnderstood; hasEpd = true; }
+            if ((epd.revisionCount ?? 0) > 0) { epdDelta.revisionCount = epd.revisionCount; hasEpd = true; }
+            if ((epd.textbookQuestions?.completed ?? 0) > 0) { epdDelta.textbookQuestions = { completed: epd.textbookQuestions.completed }; hasEpd = true; }
+            if ((epd.tuitionQuestions?.completed ?? 0) > 0) { epdDelta.tuitionQuestions = { completed: epd.tuitionQuestions.completed }; hasEpd = true; }
+            if ((epd.guideQuestions?.completed ?? 0) > 0) { epdDelta.guideQuestions = { completed: epd.guideQuestions.completed }; hasEpd = true; }
+            if ((epd.pyqs?.completed ?? 0) > 0) { epdDelta.pyqs = { completed: epd.pyqs.completed }; hasEpd = true; }
+            if (epd.difficultWords && epd.difficultWords.length > 0) { epdDelta.difficultWords = epd.difficultWords; hasEpd = true; }
+            if (epd.charactersStudied) { epdDelta.charactersStudied = epd.charactersStudied; hasEpd = true; }
+            if (epd.themesStudied) { epdDelta.themesStudied = epd.themesStudied; hasEpd = true; }
+            if (epd.importantEvents) { epdDelta.importantEvents = epd.importantEvents; hasEpd = true; }
+            if (epd.messageTheme) { epdDelta.messageTheme = epd.messageTheme; hasEpd = true; }
+            if (hasEpd) chItem.epd = epdDelta;
+          }
+
+          if (ch.englishPoemDetails) {
+            const em = ch.englishPoemDetails;
+            const emDelta: any = {};
+            let hasEm = false;
+            if (em.poemReading) { emDelta.poemReading = true; hasEm = true; }
+            if ((em.revisionCount ?? 0) > 0) { emDelta.revisionCount = em.revisionCount; hasEm = true; }
+            if ((em.textbookQuestions?.completed ?? 0) > 0) { emDelta.textbookQuestions = { completed: em.textbookQuestions.completed }; hasEm = true; }
+            if ((em.pyqs?.completed ?? 0) > 0) { emDelta.pyqs = { completed: em.pyqs.completed }; hasEm = true; }
+            if (em.stanzaMeanings) { emDelta.stanzaMeanings = em.stanzaMeanings; hasEm = true; }
+            if (em.centralIdea) { emDelta.centralIdea = em.centralIdea; hasEm = true; }
+            if (em.themes) { emDelta.themes = em.themes; hasEm = true; }
+            if (em.poeticDevices) { emDelta.poeticDevices = em.poeticDevices; hasEm = true; }
+            if (em.ownInterpretation) { emDelta.ownInterpretation = em.ownInterpretation; hasEm = true; }
+            if (hasEm) chItem.em = emDelta;
+          }
+
+          chDelta[ch.id] = chItem;
         }
 
         // Exercises
-        ch.exercises.forEach((ex, exIdx) => {
-          const hasModifiedQuestions = ex.questions && ex.questions.some(q => 
-            q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision
-          );
+        if (ch.exercises && Array.isArray(ch.exercises)) {
+          ch.exercises.forEach((ex, exIdx) => {
+            if (!ex) return;
+            const hasModifiedQuestions = ex.questions && ex.questions.some(q => 
+              q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision
+            );
 
-          if (ex.completedQuestions > 0 || ex.difficultQuestions > 0 || ex.reworkQuestions > 0 || hasModifiedQuestions) {
-            const qMap: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }> = {};
-            if (ex.questions) {
-              ex.questions.forEach((q, qIdx) => {
-                if (q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision) {
-                  // Index by question ID, questionNumber (Q1, Q2), and index
-                  qMap[q.id] = { s: q.status, d: q.difficulty, r: q.needsRevision };
-                  qMap[q.questionNumber] = { s: q.status, d: q.difficulty, r: q.needsRevision };
-                  qMap[`idx_${qIdx}`] = { s: q.status, d: q.difficulty, r: q.needsRevision };
-                }
-              });
+            if (ex.completedQuestions > 0 || ex.difficultQuestions > 0 || ex.reworkQuestions > 0 || hasModifiedQuestions) {
+              const qMap: Record<string, { s?: QuestionStatus; d?: DifficultyLevel; r?: boolean }> = {};
+              if (ex.questions && Array.isArray(ex.questions)) {
+                ex.questions.forEach((q, qIdx) => {
+                  if (q.status !== 'Not Started' || q.difficulty !== 'Medium' || q.needsRevision) {
+                    qMap[`q${qIdx}`] = {
+                      ...(q.status !== 'Not Started' ? { s: q.status } : {}),
+                      ...(q.difficulty !== 'Medium' ? { d: q.difficulty } : {}),
+                      ...(q.needsRevision ? { r: true } : {}),
+                    };
+                  }
+                });
+              }
+
+              const exItem: CompactExerciseDelta = {
+                name: ex.name,
+                comp: ex.completedQuestions || 0,
+                ...(ex.difficultQuestions > 0 ? { diff: ex.difficultQuestions } : {}),
+                ...(ex.reworkQuestions > 0 ? { rew: ex.reworkQuestions } : {}),
+                ...(Object.keys(qMap).length > 0 ? { qs: qMap as any } : {}),
+              };
+
+              // Canonical single key for ultra-compact payload
+              exDelta[`${ch.id}:${ex.name}`] = exItem;
             }
-
-            const exItem: CompactExerciseDelta = {
-              name: ex.name,
-              comp: ex.completedQuestions,
-              ...(ex.difficultQuestions > 0 ? { diff: ex.difficultQuestions } : {}),
-              ...(ex.reworkQuestions > 0 ? { rew: ex.reworkQuestions } : {}),
-              ...(Object.keys(qMap).length > 0 ? { qs: qMap } : {}),
-            };
-
-            // Save under multiple keys so ANY receiving device matches it 100%:
-            exDelta[ex.id] = exItem;
-            exDelta[`${ch.id}::${ex.name}`] = exItem;
-            exDelta[`${ch.id}::idx_${exIdx}`] = exItem;
-          }
-        });
+          });
+        }
       });
     });
   });
@@ -145,21 +312,23 @@ export function createSyncPayload(
     'exam-bitsat'
   ];
 
-  const customExams = exams.filter(e => 
-    e.id.startsWith('custom-') || 
-    e.category === 'Other' || 
-    !standardExamIds.includes(e.id)
+  const customExams = safeExams.filter(e => 
+    e && (
+      e.id?.startsWith('custom-') || 
+      e.category === 'Other' || 
+      !standardExamIds.includes(e.id)
+    )
   );
 
-  const disabledExamIds = exams.filter(e => !e.enabled).map(e => e.id);
-  const registeredExamIds = exams.filter(e => e.registered).map(e => e.id);
+  const disabledExamIds = safeExams.filter(e => e && !e.enabled).map(e => e.id);
+  const registeredExamIds = safeExams.filter(e => e && e.registered).map(e => e.id);
 
   // Keep last 14 activity logs for compact size
-  const recentLogs = (activityLogs || []).slice(-14);
+  const recentLogs = safeLogs.slice(-14);
 
   const delta: CompactSyncDelta = {
     v: 4,
-    p: profile,
+    p: safeProfile,
     c: paceConfig,
     l: recentLogs,
     ce: customExams.length > 0 ? customExams : undefined,
@@ -355,24 +524,64 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
           syllabusCovered: chD?.cov !== undefined ? chD.cov : ch.syllabusCovered,
           revisionCount: chD?.rev !== undefined ? chD.rev : ch.revisionCount,
           workedExamplesCompleted: chD?.we !== undefined ? chD.we : ch.workedExamplesCompleted,
-          questionSources: chD?.qs ? { ...ch.questionSources, ...chD.qs } : ch.questionSources,
-          physicsDetails: chD?.pd && ch.physicsDetails ? { ...ch.physicsDetails, ...chD.pd } : ch.physicsDetails,
-          chemistryDetails: chD?.cd && ch.chemistryDetails ? { ...ch.chemistryDetails, ...chD.cd } : ch.chemistryDetails,
-          biologyDetails: chD?.bd && ch.biologyDetails ? { ...ch.biologyDetails, ...chD.bd } : ch.biologyDetails,
-          englishProseDetails: chD?.epd && ch.englishProseDetails ? { ...ch.englishProseDetails, ...chD.epd } : ch.englishProseDetails,
-          englishPoemDetails: chD?.em && ch.englishPoemDetails ? { ...ch.englishPoemDetails, ...chD.em } : ch.englishPoemDetails,
-          exercises: ch.exercises.map((ex, exIdx) => {
-            // Find matching exercise in delta:
-            // 1. By composite key ch.id::ex.name
-            let exD = delta.ex ? delta.ex[`${ch.id}::${ex.name}`] : undefined;
-            // 2. By exercise index key ch.id::idx_0
-            if (!exD && delta.ex) exD = delta.ex[`${ch.id}::idx_${exIdx}`];
-            // 3. By exercise ID
-            if (!exD && delta.ex) exD = delta.ex[ex.id];
-            // 4. By name match
+          questionSources: chD?.qs && ch.questionSources ? {
+            ...ch.questionSources,
+            ...Object.fromEntries(
+              Object.entries(chD.qs).map(([k, v]) => [
+                k,
+                { ...(ch.questionSources as any)[k], ...v }
+              ])
+            )
+          } : ch.questionSources,
+          physicsDetails: chD?.pd && ch.physicsDetails ? {
+            ...ch.physicsDetails,
+            ...chD.pd,
+            numericalQuestions: chD.pd.numericalQuestions ? { ...ch.physicsDetails.numericalQuestions, ...chD.pd.numericalQuestions } : ch.physicsDetails.numericalQuestions,
+            conceptualQuestions: chD.pd.conceptualQuestions ? { ...ch.physicsDetails.conceptualQuestions, ...chD.pd.conceptualQuestions } : ch.physicsDetails.conceptualQuestions,
+            derivationQuestions: chD.pd.derivationQuestions ? { ...ch.physicsDetails.derivationQuestions, ...chD.pd.derivationQuestions } : ch.physicsDetails.derivationQuestions,
+          } : ch.physicsDetails,
+          chemistryDetails: chD?.cd && ch.chemistryDetails ? {
+            ...ch.chemistryDetails,
+            ...chD.cd,
+            numericalProblems: chD.cd.numericalProblems ? { ...ch.chemistryDetails.numericalProblems, ...chD.cd.numericalProblems } : ch.chemistryDetails.numericalProblems,
+            reactionBasedQuestions: chD.cd.reactionBasedQuestions ? { ...ch.chemistryDetails.reactionBasedQuestions, ...chD.cd.reactionBasedQuestions } : ch.chemistryDetails.reactionBasedQuestions,
+            theoryConceptQuestions: chD.cd.theoryConceptQuestions ? { ...ch.chemistryDetails.theoryConceptQuestions, ...chD.cd.theoryConceptQuestions } : ch.chemistryDetails.theoryConceptQuestions,
+            memorisationQuestions: chD.cd.memorisationQuestions ? { ...ch.chemistryDetails.memorisationQuestions, ...chD.cd.memorisationQuestions } : ch.chemistryDetails.memorisationQuestions,
+          } : ch.chemistryDetails,
+          biologyDetails: chD?.bd && ch.biologyDetails ? {
+            ...ch.biologyDetails,
+            ...chD.bd,
+            diagrams: chD.bd.diagrams ? { ...ch.biologyDetails.diagrams, ...chD.bd.diagrams } : ch.biologyDetails.diagrams,
+            terminology: chD.bd.terminology ? { ...ch.biologyDetails.terminology, ...chD.bd.terminology } : ch.biologyDetails.terminology,
+            caseBasedAssertion: chD.bd.caseBasedAssertion ? { ...ch.biologyDetails.caseBasedAssertion, ...chD.bd.caseBasedAssertion } : ch.biologyDetails.caseBasedAssertion,
+          } : ch.biologyDetails,
+          englishProseDetails: chD?.epd && ch.englishProseDetails ? {
+            ...ch.englishProseDetails,
+            ...chD.epd,
+            textbookQuestions: chD.epd.textbookQuestions ? { ...ch.englishProseDetails.textbookQuestions, ...chD.epd.textbookQuestions } : ch.englishProseDetails.textbookQuestions,
+            tuitionQuestions: chD.epd.tuitionQuestions ? { ...ch.englishProseDetails.tuitionQuestions, ...chD.epd.tuitionQuestions } : ch.englishProseDetails.tuitionQuestions,
+            guideQuestions: chD.epd.guideQuestions ? { ...ch.englishProseDetails.guideQuestions, ...chD.epd.guideQuestions } : ch.englishProseDetails.guideQuestions,
+            pyqs: chD.epd.pyqs ? { ...ch.englishProseDetails.pyqs, ...chD.epd.pyqs } : ch.englishProseDetails.pyqs,
+          } : ch.englishProseDetails,
+          englishPoemDetails: chD?.em && ch.englishPoemDetails ? {
+            ...ch.englishPoemDetails,
+            ...chD.em,
+            textbookQuestions: chD.em.textbookQuestions ? { ...ch.englishPoemDetails.textbookQuestions, ...chD.em.textbookQuestions } : ch.englishPoemDetails.textbookQuestions,
+            pyqs: chD.em.pyqs ? { ...ch.englishPoemDetails.pyqs, ...chD.em.pyqs } : ch.englishPoemDetails.pyqs,
+          } : ch.englishPoemDetails,
+          exercises: (ch.exercises || []).map((ex, exIdx) => {
+            // Find matching exercise in delta across all key formats:
+            let exD = delta.ex ? (
+              delta.ex[`${ch.id}:${ex.name}`] || 
+              delta.ex[`${ch.id}::${ex.name}`] || 
+              delta.ex[`${ch.id}:${exIdx}`] || 
+              delta.ex[`${ch.id}::idx_${exIdx}`] || 
+              delta.ex[ex.id]
+            ) : undefined;
+
             if (!exD && delta.ex) {
               const match = Object.entries(delta.ex).find(([key, val]) => 
-                key.endsWith(`::${ex.name}`) || val.name === ex.name
+                key.endsWith(`:${ex.name}`) || key.endsWith(`::${ex.name}`) || val.name === ex.name
               );
               if (match) exD = match[1];
             }
@@ -380,8 +589,14 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
             if (!exD) return ex;
 
             // Update individual question items
-            const updatedQuestions = ex.questions.map((q, qIdx) => {
-              const qD = exD?.qs ? (exD.qs[q.id] || exD.qs[q.questionNumber] || exD.qs[`idx_${qIdx}`]) : undefined;
+            const updatedQuestions = (ex.questions || []).map((q, qIdx) => {
+              const qD = exD?.qs ? (
+                exD.qs[`q${qIdx}`] ||
+                exD.qs[q.id] || 
+                exD.qs[q.questionNumber] || 
+                exD.qs[`idx_${qIdx}`]
+              ) : undefined;
+
               if (!qD) {
                 // If question wasn't individually mapped but exercise completed count includes it
                 if (exD && exD.comp > qIdx && q.status === 'Not Started') {
