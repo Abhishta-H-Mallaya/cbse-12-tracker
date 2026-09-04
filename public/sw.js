@@ -1,17 +1,7 @@
-const CACHE_NAME = 'cbse12-planner-cache-v1';
-const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.svg'
-];
+const CACHE_NAME = 'cbse12-planner-cache-v4';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
-  );
+  // Activate immediately without waiting
   self.skipWaiting();
 });
 
@@ -25,26 +15,28 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  // Don't intercept chrome-extension or external requests
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
+  // Network First, falling back to Cache for full offline PWA support
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((response) => {
-        return caches.open(CACHE_NAME).then((cache) => {
-          // Cache newly fetched assets
-          if (response.status === 200 && event.request.url.startsWith(self.location.origin)) {
-            cache.put(event.request, response.clone());
-          }
-          return response;
-        });
-      }).catch(() => {
-        return caches.match('/');
-      });
-    })
+    fetch(event.request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, clone);
+          });
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
