@@ -31,7 +31,7 @@ const createEmptySources = (textbookTotal: number | null = null): QuestionSource
 });
 
 const createExercise = (name: string, total: number | null, completed: number = 0): Exercise => ({
-  id: `ex-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Math.random().toString(36).substring(2, 7)}`,
+  id: `ex-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
   name,
   totalQuestions: total,
   completedQuestions: completed,

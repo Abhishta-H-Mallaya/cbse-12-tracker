@@ -16,15 +16,16 @@ export interface CompactSyncDelta {
   p: UserProfile;
   c: PlannerPaceConfig;
   l?: DailyActivityLog[];
-  // Delta for exams (instead of sending full static array)
+  // Delta for exams
   ce?: ExamTarget[]; // Custom added exams
   de?: string[];     // Disabled exam IDs
   re?: string[];     // Registered exam IDs
   e?: ExamTarget[];  // Legacy full exam fallback if present
   // Delta map of chapters
   ch: Record<string, { cov?: boolean; rev?: number }>;
-  // Delta map of exercises: exerciseId -> { comp: number, diff?: number, rew?: number, qs?: Record<string, { s: QuestionStatus; d: DifficultyLevel; r: boolean }> }
+  // Delta map of exercises: exerciseId / ch::exName -> { name?, comp: number, diff?, rew?, qs? }
   ex: Record<string, {
+    name?: string;
     comp: number;
     diff?: number;
     rew?: number;
@@ -68,12 +69,19 @@ export function createSyncPayload(
               });
             }
 
-            exDelta[ex.id] = {
+            const exItem = {
+              name: ex.name,
               comp: ex.completedQuestions,
               ...(ex.difficultQuestions > 0 ? { diff: ex.difficultQuestions } : {}),
               ...(ex.reworkQuestions > 0 ? { rew: ex.reworkQuestions } : {}),
               ...(Object.keys(qMap).length > 0 ? { qs: qMap } : {}),
             };
+
+            // Save under multiple keys so ANY receiving device matches it 100%:
+            // 1. By ex.id
+            exDelta[ex.id] = exItem;
+            // 2. By composite chapter + exercise name
+            exDelta[`${ch.id}::${ex.name}`] = exItem;
           }
         });
       });
@@ -118,34 +126,55 @@ export function createSyncPayload(
   };
 
   const jsonStr = JSON.stringify(delta);
-  // Compress using LZ-String for maximum QR readability & small payload
   return LZString.compressToEncodedURIComponent(jsonStr);
 }
 
-// Decode and parse payload from URL hash or direct code
+// Resilient decode function that handles all browser URL encoding variations
 export function decodeSyncPayload(encoded: string): CompactSyncDelta | null {
   if (!encoded || typeof encoded !== 'string') return null;
-  const cleanInput = encoded.trim();
+  const clean = encoded.trim();
 
-  // 1. Try LZString decompression (v3)
-  try {
-    const decompressed = LZString.decompressFromEncodedURIComponent(cleanInput);
-    if (decompressed) {
-      const parsed = JSON.parse(decompressed);
-      if (parsed && parsed.p && parsed.p.name) {
-        return parsed as CompactSyncDelta;
+  // Try multiple permutations to handle how different mobile browsers decode hash fragments
+  const candidates = [
+    clean,
+    clean.replace(/ /g, '+'),
+    (() => { try { return decodeURIComponent(clean); } catch { return clean; } })(),
+    (() => { try { return decodeURIComponent(clean).replace(/ /g, '+'); } catch { return clean; } })(),
+    (() => { try { return encodeURIComponent(clean); } catch { return clean; } })(),
+  ];
+
+  for (const cand of candidates) {
+    // 1. Try LZString URL Component
+    try {
+      const decomp = LZString.decompressFromEncodedURIComponent(cand);
+      if (decomp) {
+        const parsed = JSON.parse(decomp);
+        if (parsed && parsed.p && parsed.p.name) return parsed as CompactSyncDelta;
       }
-    }
-  } catch {}
+    } catch {}
 
-  // 2. Try legacy base64 decoding (v1 / v2 fallback)
-  try {
-    const jsonStr = decodeURIComponent(escape(atob(cleanInput)));
-    const parsed = JSON.parse(jsonStr);
-    if (parsed && parsed.p && parsed.p.name) {
-      return parsed as CompactSyncDelta;
-    }
-  } catch {}
+    // 2. Try LZString Base64
+    try {
+      const decomp = LZString.decompressFromBase64(cand);
+      if (decomp) {
+        const parsed = JSON.parse(decomp);
+        if (parsed && parsed.p && parsed.p.name) return parsed as CompactSyncDelta;
+      }
+    } catch {}
+
+    // 3. Try legacy atob base64
+    try {
+      const jsonStr = decodeURIComponent(escape(atob(cand)));
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && parsed.p && parsed.p.name) return parsed as CompactSyncDelta;
+    } catch {}
+
+    // 4. Try direct JSON
+    try {
+      const parsed = JSON.parse(cand);
+      if (parsed && parsed.p && parsed.p.name) return parsed as CompactSyncDelta;
+    } catch {}
+  }
 
   return null;
 }
@@ -155,22 +184,24 @@ export function parseAnySyncInput(input: string): CompactSyncDelta | null {
   if (!input) return null;
   let code = input.trim();
 
-  // Check if it's a URL containing #sync= or ?sync=
+  // Check if it's a URL containing #sync=, ?sync=, or &sync=
   if (code.includes('#sync=')) {
     code = code.split('#sync=')[1];
-  } else if (code.includes('sync=')) {
-    code = code.split('sync=')[1];
+  } else if (code.includes('?sync=')) {
+    code = code.split('?sync=')[1];
+  } else if (code.includes('&sync=')) {
+    code = code.split('&sync=')[1];
   }
 
   // Remove any trailing parameters or hashes if present
   code = code.split('&')[0];
+  code = code.split('#')[0];
 
   return decodeSyncPayload(code);
 }
 
 // Hydrate exams for a received sync
 export function hydrateExamsFromSync(delta: CompactSyncDelta, currentExams: ExamTarget[]): ExamTarget[] {
-  // If full legacy exams array exists in payload, use it
   if (delta.e && Array.isArray(delta.e) && delta.e.length > 0) {
     return delta.e;
   }
@@ -178,7 +209,6 @@ export function hydrateExamsFromSync(delta: CompactSyncDelta, currentExams: Exam
   const examYear = delta.p.examYear || '2027';
   const baseExams = getInitialExamsForYear(examYear);
 
-  // Apply disabled status
   const disabledSet = new Set(delta.de || []);
   const registeredSet = new Set(delta.re || []);
 
@@ -188,7 +218,6 @@ export function hydrateExamsFromSync(delta: CompactSyncDelta, currentExams: Exam
     registered: registeredSet.has(ex.id) || ex.registered,
   }));
 
-  // Append custom exams
   if (delta.ce && Array.isArray(delta.ce)) {
     delta.ce.forEach(customEx => {
       if (!merged.some(m => m.id === customEx.id)) {
@@ -225,7 +254,7 @@ export async function scanImageForQr(file: Blob | File): Promise<string | null> 
         let result = attemptScan(img.naturalWidth, img.naturalHeight);
         if (result) return resolve(result);
 
-        // 2. If high resolution photo (>1000px), downsample to 900px for faster & cleaner detection
+        // 2. If high resolution photo (>1000px), downsample to 900px
         if (img.naturalWidth > 1000 || img.naturalHeight > 1000) {
           const maxDim = 900;
           const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight);
@@ -267,7 +296,7 @@ export function playScanSuccessBeep() {
   } catch {}
 }
 
-// Apply delta to subject list
+// Apply delta to subject list with composite key matching
 export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSyncDelta): Subject[] {
   return subjects.map(sub => ({
     ...sub,
@@ -284,11 +313,23 @@ export function applySyncDeltaToSubjects(subjects: Subject[], delta: CompactSync
         return {
           ...updatedChapter,
           exercises: updatedChapter.exercises.map(ex => {
-            const exD = delta.ex ? delta.ex[ex.id] : undefined;
+            // Find matching exercise in delta:
+            // 1. By chapter + exercise name composite key (100% resilient across devices)
+            let exD = delta.ex ? delta.ex[`${ch.id}::${ex.name}`] : undefined;
+            // 2. By exercise ID
+            if (!exD && delta.ex) exD = delta.ex[ex.id];
+            // 3. By exercise name ending
+            if (!exD && delta.ex) {
+              const match = Object.entries(delta.ex).find(([key, val]) => 
+                key.endsWith(`::${ex.name}`) || (val as any).name === ex.name
+              );
+              if (match) exD = match[1];
+            }
+
             if (!exD) return ex;
 
             const updatedQuestions = ex.questions.map(q => {
-              const qD = exD.qs?.[q.id];
+              const qD = exD?.qs?.[q.id];
               if (!qD) return q;
               return {
                 ...q,

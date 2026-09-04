@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { usePlanner } from '../context/PlannerContext';
 import { 
-  decodeSyncPayload, 
+  parseAnySyncInput,
   applySyncDeltaToSubjects, 
   hydrateExamsFromSync, 
   CompactSyncDelta 
 } from '../utils/syncHelper';
+import { UserProfile } from '../types/planner';
 import { 
   Smartphone, 
   CheckCircle2, 
@@ -29,40 +30,42 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
 }) => {
   const { 
     currentProfile, 
+    profiles,
     updateCurrentProfile, 
     subjects, 
+    paceConfig,
     updatePaceConfig,
-    exams
+    exams,
+    setShowOnboardingModal
   } = usePlanner();
 
   const [urlPendingSync, setUrlPendingSync] = useState<CompactSyncDelta | null>(null);
   const [successToast, setSuccessToast] = useState(false);
 
-  // Check URL hash on mount and hash changes
+  // Check URL hash and query string on mount and hash changes
   useEffect(() => {
-    const checkHashForSync = () => {
-      const hash = window.location.hash;
-      if (hash && hash.startsWith('#sync=')) {
-        const encodedData = hash.replace('#sync=', '');
-        const decoded = decodeSyncPayload(encodedData);
-        if (decoded) {
+    const checkUrlForSync = () => {
+      const fullUrl = window.location.href;
+      if (fullUrl.includes('sync=')) {
+        const decoded = parseAnySyncInput(fullUrl);
+        if (decoded && decoded.p && decoded.p.name) {
           setUrlPendingSync(decoded);
         }
       }
     };
 
-    checkHashForSync();
-    window.addEventListener('hashchange', checkHashForSync);
-    return () => window.removeEventListener('hashchange', checkHashForSync);
+    checkUrlForSync();
+    window.addEventListener('hashchange', checkUrlForSync);
+    return () => window.removeEventListener('hashchange', checkUrlForSync);
   }, []);
 
   const activeSync = externalDelta || urlPendingSync;
 
   if (successToast) {
     return (
-      <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-50 p-4 rounded-2xl bg-emerald-600 text-white shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-fadeIn">
+      <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] p-4 rounded-2xl bg-emerald-600 text-white shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-fadeIn">
         <CheckCircle2 className="w-5 h-5 text-white" />
-        <span>Study records successfully synced! All chapters updated.</span>
+        <span>Study records successfully synced! Reloading app...</span>
       </div>
     );
   }
@@ -71,46 +74,63 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
 
   const handleConfirmSync = () => {
     try {
-      // 1. Update profile info
-      updateCurrentProfile({
-        name: activeSync.p.name,
-        examYear: activeSync.p.examYear,
-        targetExamDate: activeSync.p.targetExamDate,
-        fieldGoal: activeSync.p.fieldGoal,
-        fieldGoals: activeSync.p.fieldGoals || (activeSync.p.fieldGoal ? [activeSync.p.fieldGoal] : ['CBSE Class 12 Boards (95%+)']),
-        stream: activeSync.p.stream,
-        selectedSubjects: activeSync.p.selectedSubjects,
-      });
+      // 1. Determine target profile ID
+      const targetId = activeSync.p.id || currentProfile.id || `profile-${Date.now()}`;
 
-      // 2. Update pace config
-      if (activeSync.c) {
-        updatePaceConfig(activeSync.c);
+      const newOrUpdatedProfile: UserProfile = {
+        ...currentProfile,
+        ...activeSync.p,
+        id: targetId,
+        fieldGoals: activeSync.p.fieldGoals || (activeSync.p.fieldGoal ? [activeSync.p.fieldGoal] : ['CBSE Class 12 Boards (95%+)']),
+      };
+
+      // 2. Update profiles array in localStorage
+      let updatedProfilesList = [...profiles];
+      const matchIdx = updatedProfilesList.findIndex(p => p.id === targetId || p.name.toLowerCase() === activeSync.p.name.toLowerCase());
+      if (matchIdx >= 0) {
+        updatedProfilesList[matchIdx] = newOrUpdatedProfile;
+      } else {
+        updatedProfilesList.push(newOrUpdatedProfile);
       }
 
-      // 3. Save subjects directly with applied delta
+      // 3. Hydrate subjects and exams
       const updatedSubjects = applySyncDeltaToSubjects(subjects, activeSync);
       const updatedExams = hydrateExamsFromSync(activeSync, exams);
-      const profileKey = `cbse12_${activeSync.p.id}_`;
 
-      localStorage.setItem(`${profileKey}subjects`, JSON.stringify(updatedSubjects));
-      localStorage.setItem(`${profileKey}config`, JSON.stringify(activeSync.c));
-      localStorage.setItem(`${profileKey}logs`, JSON.stringify(activeSync.l || []));
-      localStorage.setItem(`${profileKey}exams`, JSON.stringify(updatedExams));
+      // 4. Write directly to localStorage for both targetId AND currentProfile.id
+      localStorage.setItem('cbse12_user_profiles_v2', JSON.stringify(updatedProfilesList));
+      localStorage.setItem('cbse12_current_profile_id', targetId);
+
+      const keysToSave = new Set([targetId, currentProfile.id]);
+      keysToSave.forEach(id => {
+        if (!id) return;
+        const pKey = `cbse12_${id}_`;
+        localStorage.setItem(`${pKey}subjects`, JSON.stringify(updatedSubjects));
+        localStorage.setItem(`${pKey}config`, JSON.stringify(activeSync.c || paceConfig));
+        localStorage.setItem(`${pKey}logs`, JSON.stringify(activeSync.l || []));
+        localStorage.setItem(`${pKey}exams`, JSON.stringify(updatedExams));
+      });
+
       localStorage.setItem('cbse12_onboarded', 'true');
 
-      // 4. Clean up URL & state
-      if (window.location.hash.startsWith('#sync=')) {
+      // 5. Update React state immediately
+      setShowOnboardingModal(false);
+      updateCurrentProfile(newOrUpdatedProfile);
+      if (activeSync.c) updatePaceConfig(activeSync.c);
+
+      // 6. Clean up URL & state
+      if (window.location.hash.includes('sync=') || window.location.search.includes('sync=')) {
         window.history.replaceState(null, '', window.location.pathname);
       }
       setUrlPendingSync(null);
       if (onClearExternalDelta) onClearExternalDelta();
 
-      // 5. Show success and reload state
+      // 7. Show success toast and reload
       setSuccessToast(true);
       setTimeout(() => {
         setSuccessToast(false);
         window.location.reload();
-      }, 1200);
+      }, 1000);
     } catch (e) {
       console.error('Failed to apply sync:', e);
       alert('Sync failed. Please ensure the full QR link or code was provided.');
@@ -118,7 +138,7 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
   };
 
   const handleDismiss = () => {
-    if (window.location.hash.startsWith('#sync=')) {
+    if (window.location.hash.includes('sync=') || window.location.search.includes('sync=')) {
       window.history.replaceState(null, '', window.location.pathname);
     }
     setUrlPendingSync(null);
@@ -127,11 +147,11 @@ export const SyncReceiverModal: React.FC<SyncReceiverModalProps> = ({
 
   // Count solved exercises in delta
   const solvedCount = activeSync.ex 
-    ? Object.values(activeSync.ex).reduce((acc, curr) => acc + curr.comp, 0)
+    ? Object.values(activeSync.ex).reduce((acc, curr) => acc + (curr.comp || 0), 0)
     : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
       <div className="bg-slate-900 border border-emerald-500/60 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
         {/* Header */}
         <div className="flex items-center space-x-3 pb-3 border-b border-slate-800">
