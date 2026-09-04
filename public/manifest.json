@@ -1,0 +1,18 @@
+{
+  "short_name": "CBSE 12 Tracker",
+  "name": "CBSE Class 12 Detailed Question & Content Tracker (2026-27)",
+  "description": "Granular question tracking for Maths, Physics, Chemistry, Biology and English",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "portrait-primary"
+}
